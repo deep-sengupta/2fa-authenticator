@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+    <script>
+        (function () {
+            const theme = localStorage.getItem("theme") || "light";
+            document.documentElement.setAttribute("data-theme", theme);
+        })();
+    </script>
+
+    <title>2FA Authenticator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <link href="https://unicons.iconscout.com/release/v4.0.8/css/line.css" rel="stylesheet">
+
+</head>
+<body>
+    <h1>2FA Authenticator</h1>
+
+    <div class="theme-toggle">
+        <label class="switch">
+            <input type="checkbox" id="themeSwitch" onchange="toggleTheme()">
+            <span class="slider round"></span>
+        </label>
+    </div>
+
+    {% if error %}
+        <p id="error-message">{{ error }}</p>
+    {% endif %}
+
+    <form method="POST">
+        <input type="text" name="account_name" placeholder="Account name" required>
+        <input type="text" name="setup_key" placeholder="Enter setup key" required>
+        <button type="submit">Add Account</button>
+    </form>
+
+    <div class="icon-btn-container">
+        <button class="icon-btn" onclick="startCameraScan()">
+            <i class="uil uil-camera"></i> Scan with Camera
+        </button>
+        <input type="file" id="qr-image-input" accept="image/*" onchange="scanFromImage(this)" hidden>
+        <button class="icon-btn" onclick="document.getElementById('qr-image-input').click()">
+            <i class="uil uil-image-upload"></i> Import QR Image
+        </button>
+    </div>
+
+    <div id="scanner-overlay" class="scanner-overlay" style="display: none;">
+        <div class="scanner-controls">
+            <button class="close-scanner-btn" onclick="closeScanner()">✖ Close</button>
+            <div id="qr-reader" class="qr-scanner-box"></div>
+        </div>
+    </div>
+
+    <div id="qr-result"></div>
+
+    {% if accounts %}
+        <h2 id="accounts-title">Accounts</h2>
+    {% endif %}
+
+    <ul>
+        {% for name in accounts %}
+        <div class="account-wrapper">
+            <button class="edit-btn-icon" data-account="{{ name }}" title="Rename {{ name }}">
+                <i class="uil uil-pen"></i>
+            </button>
+        <li class="account-row">
+            <div class="account-content">
+            <div class="account-info">
+                <span class="account-name">{{ name }}</span>
+                <div class="account-code code" data-account="{{ name }}">
+                    <span class="value">Loading...</span>
+                </div>
+            </div>
+            <div class="account-actions">
+                <div class="circle-timer">
+                <svg viewBox="0 0 36 36">
+                    <path class="bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    <path class="progress" id="circle-{{ name }}" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                </svg>
+                <div class="circle-timer-text" id="timer-text-{{ name }}">30</div>
+                </div>
+            </div>
+            </div>
+        </li>
+        <button class="trash-btn-icon" data-account="{{ name }}" title="Delete {{ name }}">
+            <i class="uil uil-trash-alt"></i>
+        </button>
+        </div>
+    {% endfor %}
+    </ul>
+
+    <div id="qr-reader-temp" style="display:none;"></div>
+
+    <script>
+    function getTimeRemaining() {
+        return 30 - (Math.floor(Date.now() / 1000) % 30);
+    }
+
+    function refreshCodes() {
+        document.querySelectorAll('.code').forEach(el => {
+            const account = el.dataset.account;
+            fetch(`/get_code/${account}`)
+            .then(res => res.json())
+            .then(data => {
+                el.querySelector('.value').textContent = data.code;
+            });
+        });
+    }
+
+    function updateTimers() {
+        const seconds = getTimeRemaining();
+        const percent = (seconds / 30) * 100;
+        document.querySelectorAll('.progress').forEach(path => {
+            path.style.strokeDashoffset = 100 - percent;
+        });
+        document.querySelectorAll('.circle-timer-text').forEach(el => {
+            el.innerText = seconds;
+            el.classList.toggle("low-time", seconds <= 10);
+        });
+        if (seconds === 30) refreshCodes();
+    }
+
+    setInterval(updateTimers, 1000);
+
+    function extractDataFromOtpUri(uri) {
+        if (!uri.startsWith("otpauth://totp/")) return null;
+        const label = decodeURIComponent(uri.split("otpauth://totp/")[1].split("?")[0]);
+        const params = new URLSearchParams(uri.split("?")[1]);
+        const secret = params.get("secret");
+        const account = label.includes(":") ? label.split(":")[1] : label;
+        return { account_name: account, setup_key: secret };
+    }
+
+    function applyTheme(theme) {
+        document.documentElement.setAttribute("data-theme", theme);
+        localStorage.setItem("theme", theme);
+        document.getElementById("themeSwitch").checked = theme === "dark";
+    }
+
+    function toggleTheme() {
+        applyTheme(document.getElementById("themeSwitch").checked ? "dark" : "light");
+    }
+
+    let scannerInstance;
+
+    function startCameraScan() {
+        const overlay = document.getElementById('scanner-overlay');
+        if (overlay.style.display === "none") {
+            overlay.style.display = "flex";
+            scannerInstance = new Html5Qrcode("qr-reader");
+            scannerInstance.start(
+                { facingMode: "environment" },
+                { fps: 10, qrbox: 250 },
+            decodedText => {
+                const data = extractDataFromOtpUri(decodedText);
+                if (data) {
+                    document.querySelector('input[name="account_name"]').value = data.account_name;
+                    document.querySelector('input[name="setup_key"]').value = data.setup_key;
+                    document.getElementById("qr-result").innerText = "QR scanned successfully";
+                    scannerInstance.stop().then(() => {
+                        scannerInstance.clear();
+                        scannerInstance = null;
+                        overlay.style.display = "none";
+                        document.querySelector('form').submit();
+                    });
+                    } else {
+                        document.getElementById("qr-result").innerText = "Invalid QR code";
+                    }
+                }
+            );
+        }
+    }
+
+    function closeScanner() {
+        const overlay = document.getElementById('scanner-overlay');
+        if (scannerInstance) {
+            scannerInstance.stop().then(() => {
+                scannerInstance.clear();
+                scannerInstance = null;
+                overlay.style.display = "none";
+            });
+        } else {
+            overlay.style.display = "none";
+        }
+    }
+
+    function scanFromImage(input) {
+        if (!input.files.length) return;
+        const file = input.files[0];
+        const qr = new Html5Qrcode("qr-reader-temp");
+        qr.scanFile(file, true)
+            .then(decodedText => {
+                const data = extractDataFromOtpUri(decodedText);
+                if (data) {
+                    document.querySelector('input[name="account_name"]').value = data.account_name;
+                    document.querySelector('input[name="setup_key"]').value = data.setup_key;
+                    document.getElementById("qr-result").innerText = "QR image scanned successfully";
+                } else {
+                    document.getElementById("qr-result").innerText = "Invalid QR code image";
+                }
+            })
+        .catch(() => {
+            document.getElementById("qr-result").innerText = "Failed to read QR image";
+        });
+    }
+
+    window.onload = function () {
+        applyTheme(localStorage.getItem("theme") || "light");
+        if (document.querySelectorAll('.code').length > 0) {
+            refreshCodes();
+            updateTimers();
+        }
+        const errorEl = document.getElementById("error-message");
+        if (errorEl) {
+            setTimeout(() => {
+                errorEl.style.opacity = 0;
+                setTimeout(() => errorEl.remove(), 1000);
+            }, 3000);
+        }
+    }
+
+    function checkAccountsCount() {
+        const wrappers = document.querySelectorAll('.account-wrapper');
+        const title = document.getElementById('accounts-title');
+        if (title && wrappers.length === 0) title.remove();
+    }
+
+    document.querySelectorAll('.trash-btn-icon').forEach(btn => {
+        btn.addEventListener('click', () => {
+            btn.classList.add('clicked');
+            setTimeout(() => btn.classList.remove('clicked'), 300);
+            const account = btn.dataset.account;
+            fetch(`/delete/${account}`, { method: 'POST' })
+            .then(res => {
+                if (res.ok) {
+                    btn.closest('.account-wrapper').remove();
+                    checkAccountsCount();
+                }
+            });
+        });
+    });
+
+    document.querySelectorAll('.edit-btn-icon').forEach(btn => {
+        btn.addEventListener('click', () => {
+            btn.classList.add('clicked');
+            setTimeout(() => btn.classList.remove('clicked'), 300);
+            const oldName = btn.dataset.account;
+            const newName = prompt("Enter a new name for the account:", oldName);
+            if (newName && newName !== oldName) {
+                fetch(`/rename/${oldName}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_name: newName })
+                }).then(res => {
+                if (res.ok) {
+                    const wrapper = btn.closest('.account-wrapper');
+                    wrapper.querySelector('.account-name').innerText = newName;
+                    wrapper.querySelector('.code').setAttribute('data-account', newName);
+                    wrapper.querySelector('.trash-btn-icon').setAttribute('data-account', newName);
+                    btn.setAttribute('data-account', newName);
+                    document.querySelector('form').reset();
+                } else {
+                    alert("Failed to rename account.");
+                }
+            });
+        }
+        });
+    });
+    </script>
+
+</body>
+</html>
