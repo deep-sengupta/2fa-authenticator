@@ -33,7 +33,7 @@ A lightweight web-based Two-Factor Authentication (2FA) app built using **Flask*
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-username/2fa-authenticator.git
+git clone https://github.com/deep-sengupta/2fa-authenticator.git
 cd 2fa-authenticator
 ```
 
